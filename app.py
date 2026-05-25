@@ -88,9 +88,101 @@ def provision_app_infrastructure(app_name: str, language: str) -> str:
     branch_name = f"infra/provision-{app_name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     image, port = "nginx:latest", 80
 
+    namespace_yaml = f"""apiVersion: v1
+kind: Namespace
+metadata:
+  name: {app_name}
+  labels:
+    language: {language.lower()}
+"""
+    pvc_yaml = f"""apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {app_name}-pvc
+  namespace: {app_name}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: kube-aws-gp3-storage
+  resources:
+    requests:
+      storage: 1Gi
+"""
+    service_yaml = f"""apiVersion: v1
+kind: Service
+metadata:
+  name: {app_name}-svc
+  namespace: {app_name}
+spec:
+  selector:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/instance: {app_name}
+  ports:
+  - port: 80
+    targetPort: {port}
+  type: NodePort
+"""
+    ingress_yaml = f"""apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {app_name}-ingress
+  namespace: {app_name}
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: instance
+    alb.ingress.kubernetes.io/listen-ports: '[{{"HTTP": 80}}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    alb.ingress.kubernetes.io/success-codes: "200-399"
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {app_name}-svc
+                port:
+                  number: 80
+"""
+    values_yaml = f"""replicaCount: 1
+
+namespace: {app_name}
+
+persistence:
+  enabled: true
+  claimName: {app_name}-pvc
+  mountPath: /data
+
+containers:
+  - name: {app_name}
+    image: {image}
+    port: {port}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+    volumeMounts:
+      - name: app-storage
+        mountPath: /app/data
+
+volumes:
+  - name: app-storage
+    persistentVolumeClaim:
+      claimName: {app_name}-pvc
+"""
     files = {
-        f"manifests/namespaces/{app_name}.yaml": f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {app_name}\n  labels:\n    language: {language.lower()}\n",
-        f"manifests/services/{app_name}-service.yaml": f"apiVersion: v1\nkind: Service\nmetadata:\n  name: {app_name}-svc\n  namespace: {app_name}\nspec:\n  selector:\n    app.kubernetes.io/name: app\n    app.kubernetes.io/instance: {app_name}\n  ports:\n  - port: 80\n    targetPort: {port}\n  type: NodePort\n",
+        f"manifests/namespaces/{app_name}.yaml":                    namespace_yaml,
+        f"manifests/persistent-volume-claims/{app_name}-pvc.yaml":  pvc_yaml,
+        f"manifests/services/{app_name}-service.yaml":              service_yaml,
+        f"manifests/ingress/{app_name}-ingress.yaml":               ingress_yaml,
+        f"app-values/{app_name}/values.yaml":                       values_yaml,
     }
 
     try:
