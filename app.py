@@ -264,34 +264,45 @@ async def chat(req: ChatRequest):
     messages = req.messages
     tool_calls_log = []
 
-    while True:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages,
-        )
+    try:
+        while True:
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=messages,
+            )
 
-        if response.stop_reason == "end_turn":
-            text = next((b.text for b in response.content if hasattr(b, "text")), "")
-            return {"response": text, "tool_calls": tool_calls_log}
+            if response.stop_reason == "end_turn":
+                text = next((b.text for b in response.content if hasattr(b, "text")), "")
+                return {"response": text, "tool_calls": tool_calls_log}
 
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    result = execute_tool(block.name, block.input)
-                    tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result})
-                    tool_calls_log.append({"tool": block.name, "input": block.input, "result": result})
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result = execute_tool(block.name, block.input)
+                        tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result})
+                        tool_calls_log.append({"tool": block.name, "input": block.input, "result": result})
 
-            messages = messages + [
-                {"role": "assistant", "content": [b.model_dump() for b in response.content]},
-                {"role": "user", "content": tool_results},
-            ]
-        else:
-            text = next((b.text for b in response.content if hasattr(b, "text")), "")
-            return {"response": text, "tool_calls": tool_calls_log}
+                messages = messages + [
+                    {"role": "assistant", "content": [b.model_dump() for b in response.content]},
+                    {"role": "user", "content": tool_results},
+                ]
+            else:
+                text = next((b.text for b in response.content if hasattr(b, "text")), "")
+                return {"response": text, "tool_calls": tool_calls_log}
+
+    except anthropic.AuthenticationError:
+        return {"response": "Error: Invalid Anthropic API key. Please check the mcp-anthropic-secret.", "tool_calls": []}
+    except anthropic.BadRequestError as e:
+        msg = str(e)
+        if "credit balance" in msg:
+            return {"response": "Error: Anthropic API credit balance is too low. Please top up at console.anthropic.com/settings/billing.", "tool_calls": []}
+        return {"response": f"Error: {msg}", "tool_calls": []}
+    except Exception as e:
+        return {"response": f"Error: {str(e)}", "tool_calls": []}
 
 
 # ── Health ─────────────────────────────────────────────────────────────────────
